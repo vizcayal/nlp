@@ -1,0 +1,16 @@
+AVeriTeC course subset
+
+Source: AVeriTeC: A Dataset for Real-world Claim Verification with Evidence
+from the Web, Michael Schlichtkrull, Zhijiang Guo, and Andreas Vlachos (2023).
+Dataset: https://fever.ai/dataset/averitec.html
+Paper: https://arxiv.org/abs/2305.13117
+Repository: https://github.com/MichSchli/AVeriTeC
+
+The source dataset is licensed under Creative Commons
+Attribution-NonCommercial 4.0 International (CC BY-NC 4.0):
+https://creativecommons.org/licenses/by-nc/4.0/
+
+Course adaptation: selected Supported/Refuted claims, JSONL field projection,
+and staff-authored Part 3 candidate questions and keys. Original retained claims,
+labels, and question-answer evidence text are preserved. Source provenance and
+staff-held evaluation records are distributed separately to course staff.
