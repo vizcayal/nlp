@@ -1,0 +1,108 @@
+================================================================================
+PLAN DE IMPLEMENTACIÓN - FASE 1 (PARTE 1): WordOverlapFactChecker
+Archivo objetivo: d:\ML-AI\nlp\hw4\factcheck.py
+================================================================================
+
+1. OBJETIVO Y RESTRICCIONES DE LA PARTE 1
+--------------------------------------------------------------------------------
+- Método a completar:
+  WordOverlapFactChecker.predict(self, fact: str, passages: List[dict]) -> str
+- Salida requerida:
+  "Supported" o "Refuted"
+- Datos de entrada en Parte 1:
+  El script factchecking_main.py filtra los pasajes con answer_only_passages(),
+  por lo que cada pasaje contiene únicamente:
+    * "answer" / "text": texto de la respuesta.
+    * "boolean_explanation": explicación de la respuesta booleana (si existe).
+    * "answer_type": "Extractive", "Abstractive", "Boolean" o "Unanswerable".
+  (El texto de la pregunta "question" NO está disponible en la Parte 1).
+- Reglas del curso:
+  * Usar únicamente características léxicas NO neuronales.
+  * Se permite ajustar un combinador pequeño de características sobre las
+    etiquetas visibles de data/dev.jsonl, siempre que la inferencia quede 100%
+    autocontenida dentro de factcheck.py.
+  * Meta de puntaje completo (Full Credit): Macro-F1 >= 0.63.
+  * Límite de tiempo de ejecución: 60 segundos en CPU.
+
+2. PREPROCESAMIENTO Y NORMALIZACIÓN LÉXICA
+--------------------------------------------------------------------------------
+Para comparar el reclamo (fact) con el texto de respuesta answer_text(p) de
+cada pasaje válido (descartando los que cumplan is_unanswerable(p)):
+
+a) Normalización de texto y cifras:
+   - Convertir a minúsculas.
+   - Eliminar comas separadoras de miles dentro de números (ej. "1,000" -> "1000",
+     "85,41,784" -> "8541784") para unificar formatos numéricos.
+   - Mapear números escritos en palabras comunes a dígitos ("one" -> "1",
+     "two" -> "2", ..., "ten" -> "10", "twelve"/"dozen" -> "12",
+     "hundred" -> "100", "half" -> "0.5" / "50").
+
+b) Tokenización y reducción morfológica (stemming ligero):
+   - Extraer tokens alfanuméricos y decimales con expresiones regulares.
+   - Separar stopwords generales en inglés (conservando aparte las palabras de
+     negación para sus propias características).
+   - Aplicar stemming ligero de sufijos comunes (-s, -es, -ed, -ing, -ly) para
+     emparejar variantes morfológicas (ej. "arrests" <-> "arrested",
+     "increased" <-> "increase").
+
+3. CONJUNTO DE CARACTERÍSTICAS (FEATURES) A EXTRAER
+--------------------------------------------------------------------------------
+Se extraerán cuatro familias de señales léxicas sobre (fact, passages):
+
+Familia A - Solapamiento Léxico (Unigramas, Bigramas y N-gramas de caracteres):
+  1. content_recall_all: Proporción de palabras/stems de contenido del fact que
+     aparecen en la unión de todas las respuestas válidas.
+  2. content_recall_max: Máximo recall de palabras de contenido del fact en un
+     solo pasaje individual.
+  3. content_jaccard_max: Máxima similitud de Jaccard entre los tokens de
+     contenido del fact y un pasaje individual.
+  4. bigram_recall: Proporción de bigramas de contenido del fact presentes en
+     las respuestas.
+  5. char_ngram_sim: Similitud léxica de n-gramas de caracteres (3-gramas /
+     4-gramas) para capturar nombres propios y raíces compartidas.
+
+Familia B - Coincidencia y Discrepancia Numérica:
+  6. has_numbers: Indicador de si el fact contiene cifras numéricas.
+  7. num_match_ratio: Fracción de números del fact que aparecen exactamente (o
+     con redondeo cercano, ej. 39.9% <-> 40%) en las respuestas.
+  8. num_mismatch_flag: Indicador activo cuando el fact contiene cifras pero las
+     respuestas presentan cifras distintas sin coincidir con las del fact (señal
+     fuerte de "Refuted").
+
+Familia C - Señales de Tipo de Respuesta (Booleanas y Unanswerable):
+  9. bool_yes_ratio / count: Presencia o proporción de pasajes Booleanos con
+     respuesta afirmativa ("Yes", "Correct", "True"). Señal de "Supported".
+ 10. bool_no_ratio / count: Presencia o proporción de pasajes Booleanos con
+     respuesta negativa ("No", "False"). Señal de "Refuted" (modulada por si el
+     propio fact es una afirmación negativa).
+ 11. unanswerable_ratio: Fracción de pasajes marcados como is_unanswerable(p).
+
+Familia D - Marcadores Explícitos de Refutación y Paridad de Negación:
+ 12. refutation_cues: Conteo de términos de desmentido o falsedad en las
+     respuestas ("fake", "false", "hoax", "satire", "satirical", "parody",
+     "spoof", "scam", "fabricated", "forged", "fiction", "humorous",
+     "unscientific", "no evidence", "no record", "no such", "not true",
+     "never said", "denied", "no cure", "nothing found", "incorrectly").
+ 13. negation_mismatch: Diferencia/interacción entre la presencia de negación en
+     el fact ("not", "no", "never", "none", "nobody", "without") y la presencia
+     de negación en las respuestas.
+
+4. COMBINADOR LINEAL AUTOCONTENIDO Y VALIDACIÓN
+--------------------------------------------------------------------------------
+1. Ajuste offline sobre data/dev.jsonl:
+   - Construir la matriz de características X (260 x d) y el vector de etiquetas
+     y (Supported = 1, Refuted = 0).
+   - Evaluar mediante validación cruzada estratificada (5-fold CV) una Regresión
+     Logística con regularización L2 para confirmar que el Macro-F1 supere con
+     amplio margen el objetivo de 0.63 sin sobreajuste.
+2. Integración en factcheck.py:
+   - Guardar los coeficientes aprendidos (WEIGHTS y BIAS) como constantes de
+     numpy dentro de WordOverlapFactChecker.
+   - En predict(self, fact, passages), calcular el vector de características x,
+     evaluar score = np.dot(x, WEIGHTS) + BIAS y retornar SUPPORTED si
+     score >= 0.0, o REFUTED en caso contrario.
+3. Verificación:
+   - Ejecutar: python factchecking_main.py --mode word_overlap
+   - Comprobar matriz de confusión, Macro-F1 >= 0.63 y tiempo de ejecución.
+================================================================================
+
