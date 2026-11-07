@@ -83,6 +83,53 @@ def extract_numbers(text:str) -> List[float]:
             numbers.append(float(t))
     return numbers
 
+def is_year(n:float) -> bool:
+    year_is = n.is_integer() and 1800<= int(n) <=2040
+    return year_is
+
+
+def numbers_match(c: float, a: float, rel_tol: float = 0.05) -> bool:
+    if is_year(c) or is_year(a):
+        return c == a
+    if abs(c - a) < 1e-6:
+        return True
+    if round(a) == c and abs(c - a) <= 0.55:
+        return True
+    denom = max(abs(c), 1e-6)
+    return abs(c - a) / denom <= rel_tol
+
+def number_match_features(claim: str, answer: str, rel_tol: float = 0.05) -> Dict[str, float]:
+    claim_nums = extract_numbers(claim)
+    answer_nums = extract_numbers(answer)
+    quant_claim = [n for n in claim_nums if not is_year(n)]
+    year_claim = [n for n in claim_nums if is_year(n)]
+    #1.¿El claim tiene cifra cuantitativa?
+    has_quant = 1.0 if quant_claim else 0.0
+
+    #2.Proporción de cifras cuantitativas del claim respaldadas en el answer
+    if quant_claim:
+        matched_q = sum(1 for c in quant_claim if any(numbers_match(c, a, rel_tol) for a in answer_nums))
+        quant_match_ratio = matched_q / len(quant_claim)
+    else:
+        quant_match_ratio = 0.0
+
+    # 3. Bandera de discrepancia: el claim pide cifras, el answer tiene cifras, pero no coinciden
+    quant_mismatch = 1.0 if (quant_claim and answer_nums and quant_match_ratio < 0.5) else 0.0
+
+    # 4. Proporción de años del claim presentes en el answer
+    if year_claim:
+        matched_y = sum(1 for y in year_claim if any(y == a for a in answer_nums))
+        year_match_ratio = matched_y / len(year_claim)
+    else:
+        year_match_ratio = 0.0
+
+    return {
+        "has_quant": has_quant,
+        "quant_match_ratio": quant_match_ratio,
+        "quant_mismatch": quant_mismatch,
+        "year_match_ratio": year_match_ratio,
+    }
+
 def overlap_calc(claim:str, answer:str) -> float:
     claim_tokens = content_tokens(claim)
     answer_tokens = content_tokens(answer)
@@ -113,11 +160,105 @@ NEGATIONS = frozenset("""
 not no never none nobody nothing neither nor without
 """.split())
 
+REFUTATION_WORDS = frozenset("""
+fake false hoax satire satirical parody spoof scam fabricated
+forged fiction humorous unscientific unfounded baseless
+incorrectly inaccurate misattributed untrue denied
+""".split())
+
+REFUTATION_PHRASES = (
+    "no evidence",
+    "no record",
+    "no such",
+    "not true",
+    "never said",
+    "no cure",
+    "cannot be cured",
+    "can t be cured",
+    "nothing found",
+    "no coherent data",
+    "no link",
+    "no impact",
+    "no effect",
+    "didn t work",
+    "did not work",
+    "remains a concept",
+)
+
 def content_tokens(text:str) -> List[str]:
     tokens = tokenize(text)
     content= [stem(t) for t in tokens if t not in STOPWORDS and t not in NEGATIONS]
     return content
 
+def passage_signal_features(claim: str, passages: List[dict]) -> Dict[str, float]:
+    if not passages:
+        return {
+            "unanswerable_ratio": 1.0,
+            "bool_yes_ratio": 0.0,
+            "bool_no_ratio": 0.0,
+            "refute_cues": 0.0,
+            "neg_mismatch": 0.0,
+            "claim_neg": 1.0 if has_negation(claim) else 0.0,
+        }
+
+    claim_tok_list = tokenize(claim)
+    claim_tok_set = set(claim_tok_list)
+    norm_claim = " ".join(claim_tok_list)
+    claim_neg = 1.0 if has_negation(claim) else 0.0
+
+    unans_count = 0
+    valid_count = 0
+    yes_count = 0
+    no_count = 0
+    refute_cues = 0
+    ans_neg_count = 0
+
+    for p in passages:
+        if is_unanswerable(p):
+            unans_count += 1
+            continue
+
+        valid_count += 1
+        raw_ans = str(p.get("answer") or p.get("text") or "").strip()
+        raw_tokens = tokenize(raw_ans)
+        first_tok = raw_tokens[0] if raw_tokens else ""
+
+        # 1. Respuestas que inician con afirmación o negación directa
+        if first_tok in ("yes", "correct", "true"):
+            yes_count += 1
+        elif first_tok in ("no", "false", "incorrect"):
+            no_count += 1
+
+        # 2. Marcadores de refutación en el texto completo (answer + boolean_explanation)
+        full_ans = answer_text(p)
+        ans_tok_list = tokenize(full_ans)
+        ans_tok_set = set(ans_tok_list)
+        norm_ans = " ".join(ans_tok_list)
+
+        for w in REFUTATION_WORDS:
+            if w in ans_tok_set and w not in claim_tok_set:
+                refute_cues += 1
+
+        for phrase in REFUTATION_PHRASES:
+            if phrase in norm_ans and phrase not in norm_claim:
+                refute_cues += 1
+
+        # 3. Negación en el pasaje
+        if has_negation(full_ans):
+            ans_neg_count += 1
+
+    denom = max(valid_count, 1)
+    ans_neg_ratio = ans_neg_count / denom
+    neg_mismatch = ans_neg_ratio if claim_neg == 0.0 else 0.0
+
+    return {
+        "unanswerable_ratio": unans_count / len(passages),
+        "bool_yes_ratio": yes_count / denom,
+        "bool_no_ratio": no_count / denom,
+        "refute_cues": float(refute_cues),
+        "neg_mismatch": neg_mismatch,
+        "claim_neg": claim_neg,
+    }
 
 class EntailmentModel:
     """Provided batching and probability wrapper around the pretrained NLI model."""
@@ -202,12 +343,40 @@ class AlwaysRefutedFactChecker(FactChecker):
 
 
 
+
+
 class WordOverlapFactChecker(FactChecker):
     """Part 1: a non-neural answer-side word-overlap classifier."""
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        # TODO: Use answer-side lexical features; return Supported or Refuted.
-        raise NotImplementedError("Complete Part 1")
+        valid_answers = [answer_text(p) for p in passages if not is_unanswerable(p)]
+        if not valid_answers:
+            return REFUTED
+        joined_answer = " ".join(valid_answers)
+        # 1. Bloque de Solapamiento Léxico
+        overlap_all = overlap_calc(fact, joined_answer)
+        overlap_max = max(overlap_calc(fact, a) for a in valid_answers)
+        # 2. Bloque de Coincidencia Numérica
+        num_feats = number_match_features(fact, joined_answer)
+        # 3. Bloque de Señales del Pasaje (Yes/No, Refutación, Negación)
+        sig_feats = passage_signal_features(fact, passages)
+        # 4. Puntaje combinado:
+        #    (+) suman a favor de Supported
+        #    (-) restan a favor de Refuted
+        score = (
+            1.2 * overlap_all
+            + 0.8 * overlap_max
+            + 0.9 * num_feats["quant_match_ratio"]
+            + 0.3 * num_feats["year_match_ratio"]
+            + 1.1 * sig_feats["bool_yes_ratio"]
+            - 1.4 * num_feats["quant_mismatch"]
+            - 1.3 * sig_feats["bool_no_ratio"]
+            - 0.9 * sig_feats["refute_cues"]
+            - 0.6 * sig_feats["neg_mismatch"]
+            - 0.5 * sig_feats["unanswerable_ratio"]
+            - 0.45  # umbral base (bias)
+        )
+        return SUPPORTED if score >= 0.0 else REFUTED
 
 
 class EntailmentFactChecker(FactChecker):
