@@ -1,5 +1,7 @@
 """Assignment 4 starter. Complete the three TODO methods; submit this file only."""
 
+import math
+import re
 from typing import Dict, List, Sequence
 
 import numpy as np
@@ -42,6 +44,79 @@ def is_unanswerable(passage: Dict) -> bool:
     kind = str(passage.get("answer_type") or "").strip().lower()
     text = answer_text(passage).strip().lower().rstrip(" .!?:;")
     return kind == "unanswerable" or not text or text == "no answer could be found"
+
+def normalize_text(text: str) ->str:
+    """lowercase + remove punctuation, thousands separators (keep dots)"""
+    text  = text.lower()
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)
+    text = re.sub(r"[^\w\s.]", " ", text)
+    return text
+
+def tokenize(text:str)->List[str]:
+    text = normalize_text(text)
+    return re.findall(r"\d+(?:\.\d+)?|[a-z]+", text)
+
+def stem(token:str) -> str:
+    """stemmer"""
+
+    if token.endswith("ies") and len(token) >4:
+        token= token[:len(token)-3] + "y"
+
+    if token.isdigit() or len(token)<= 3:
+        return token
+
+    for suffix in ("ing","ed","es","s","ly"):
+        if token.endswith(suffix) and len(token) - len(suffix) >=3:
+            token = token[:len(token)-len(suffix)]
+            break
+    return token
+
+def has_negation(text:str) ->bool:
+    tokens =tokenize(text)
+    return any(t in NEGATIONS  for t in tokens )
+
+def extract_numbers(text:str) -> List[float]:
+    tokens = tokenize(text)
+    numbers= []
+    for t in tokens:
+        if re.fullmatch(r"\d+(?:\.\d+)?",t):
+            numbers.append(float(t))
+    return numbers
+
+def overlap_calc(claim:str, answer:str) -> float:
+    claim_tokens = content_tokens(claim)
+    answer_tokens = content_tokens(answer)
+    set_claim = set(claim_tokens)
+    set_answer= set(answer_tokens )
+    if not set_claim:
+        overlap = 0
+        return overlap
+
+    intersection = set_claim &  set_answer
+    overlap = len(intersection) / len(set_claim)
+    return overlap
+
+
+STOPWORDS = frozenset("""
+a an the and or but as at by for from in into of on to with
+about above after against between during through
+is am are was were be been being
+do does did have has had
+it its this that these those
+i me my we our you your he him his she her they them their
+who what when where which how
+can could may might must shall should will would
+there here then than too very also s
+""".split())
+
+NEGATIONS = frozenset("""
+not no never none nobody nothing neither nor without
+""".split())
+
+def content_tokens(text:str) -> List[str]:
+    tokens = tokenize(text)
+    content= [stem(t) for t in tokens if t not in STOPWORDS and t not in NEGATIONS]
+    return content
 
 
 class EntailmentModel:
@@ -124,6 +199,7 @@ class RandomGuessFactChecker(FactChecker):
 class AlwaysRefutedFactChecker(FactChecker):
     def predict(self, fact: str, passages: List[dict]) -> str:
         return REFUTED
+
 
 
 class WordOverlapFactChecker(FactChecker):
